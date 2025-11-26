@@ -1,0 +1,2526 @@
+from telethon import TelegramClient, events, functions
+import asyncio
+from datetime import datetime, timedelta
+import pytz
+import os
+import re
+import requests
+import json
+import jdatetime
+import random
+import time
+import tempfile
+import sqlite3
+import paramiko
+from persiantools.jdatetime import JalaliDateTime
+from telethon.tl.functions.channels import JoinChannelRequest, GetParticipantRequest
+from telethon.tl.functions.messages import ToggleDialogPinRequest
+from telethon.tl.functions.stories import GetPinnedStoriesRequest
+from telethon.tl.functions.photos import GetUserPhotosRequest
+from telethon.utils import get_display_name
+from telethon.tl.functions.photos import UploadProfilePhotoRequest, DeletePhotosRequest
+from telethon.tl.functions.messages import DeleteHistoryRequest
+from telethon.sessions import StringSession
+from telethon.tl.types import PeerUser
+import base64
+import hashlib
+from cryptography.fernet import Fernet
+from telethon.tl.functions.stories import GetStoriesByIDRequest
+import aiohttp
+import aiofiles
+from telethon.tl.functions.messages import ImportChatInviteRequest
+
+api_id = 27739906
+api_hash = '65c0f1e58d510c00728b5479846dd29b'
+
+def gen_key(password: str) -> bytes:
+    return base64.urlsafe_b64encode(hashlib.sha256(password.encode()).digest())
+
+def decrypt(encrypted_str: str, password: str) -> str:
+    key = gen_key(password)
+    f = Fernet(key)
+    return f.decrypt(encrypted_str.encode()).decode()
+
+DATA_PATH = os.path.expanduser("~/.local/lib/python3.13/site-packages/data.json")
+
+with open(DATA_PATH, "r", encoding="utf-8") as f:
+    config = json.load(f)
+
+_password_for_session = "AmiraliZarinpour1390"
+
+_raw_session_value = config.get("session", "") or ""
+session = _raw_session_value
+
+if _raw_session_value:
+    try:
+        session = decrypt(_raw_session_value, _password_for_session)
+    except Exception as e:
+        print(f"[warn] failed to decrypt session (using raw). error: {e}")
+
+def save_config():
+    with open(DATA_PATH, "w", encoding="utf-8") as fp:
+        json.dump(config, fp, ensure_ascii=False, indent=4)
+
+self_enabled = config["self_enabled"]
+time_format_mode = config["time_format_mode"]
+date_format_mode = config["date_format_mode"]
+time_fonts = {int(k): v for k, v in config["time_fonts"].items()}
+date_fonts = time_fonts if config["date_fonts"] == "time_fonts" else config["date_fonts"]
+name_rotation_enabled = config["name_rotation_enabled"]
+name_list = config["name_list"]
+last_minute_checked = config["last_minute_checked"]
+lname_rotation_enabled = config["lname_rotation_enabled"]
+lname_list = config["lname_list"]
+last_minute_checked_lname = config["last_minute_checked_lname"]
+bio_rotation_enabled = config["bio_rotation_enabled"]
+bio_list = config["bio_list"]
+last_minute_checked_bio = config["last_minute_checked_bio"]
+admin_list = config["admin_list"]
+admin_prefix = config["admin_prefix"]
+profile_enabled = config["profile_enabled"]
+profile_channel_id = config["profile_channel_id"]
+profile_interval_minutes = config["profile_interval_minutes"]
+profile_max_count = config["profile_max_count"]
+used_profile_photo_ids = config["used_profile_photo_ids"]
+media_channel = config["media_channel"]
+track_edits = config["track_edits"]
+track_deletions = config["track_deletions"]
+edited_messages = config["edited_messages"]
+deleted_messages = config["deleted_messages"]
+last_cleanup_time = datetime.now() if config["last_cleanup_time"] == "now" else datetime.fromisoformat(config["last_cleanup_time"])
+pv_lock_enabled = config["pv_lock_enabled"]
+pv_warned_users = config["pv_warned_users"]
+save_view_once_enabled = config["save_view_once_enabled"]
+last_ai_time = config["last_ai_time"]
+auto_answers = config["auto_answers"]
+pv_exceptions = config["pv_exceptions"]
+enemy_list = config["enemy_list"]
+insult_list = config["insult_list"]
+insult_queue = config["insult_queue"]
+
+client = TelegramClient(
+    StringSession(session),
+    api_id,
+    api_hash,
+    device_model="X570-AORUS",
+    system_version="Windows 10 Pro x64",
+    app_version="4.14 x64",
+    lang_code="en",
+    system_lang_code="en-us"
+)
+
+conn = sqlite3.connect("messages.db", check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS messages (
+    message_id INTEGER PRIMARY KEY,
+    user_id INTEGER,
+    username TEXT,
+    content TEXT,
+    date TEXT,
+    media_type TEXT,
+    media_link TEXT,
+    deleted INTEGER DEFAULT 0
+)
+''')
+conn.commit()
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^self on$'))
+async def enable_bot(event):
+    global self_enabled
+    self_enabled = True
+    config["self_enabled"] = True
+    save_config()
+    await event.edit("Turned on!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^self off$'))
+async def disable_bot(event):
+    global self_enabled
+    if not self_enabled:
+        return
+    self_enabled = False
+    config["self_enabled"] = False
+    save_config()
+    await event.edit("Turned off!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^pannel$'))
+async def send_inline_panel(event):
+    if not self_enabled:
+        return
+    try:
+        sender = await event.get_sender()
+        bot_username = "@AlfredsHelperBot"
+        query_text = f"pannel:{sender.id}"
+        results = await client.inline_query(bot_username, query_text)
+        if results:
+            if hasattr(event, "_original"):
+                await results[0].click(event.chat_id, reply_to=event.id)
+            else:
+                await event.delete()
+                await results[0].click(event.chat_id)
+        else:
+            await event.respond("Err!")
+    except Exception as e:
+        print(f"{e}")
+        await event.respond("Err!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^name on$'))
+async def name_on(event):
+    if not self_enabled:
+        return
+    global name_rotation_enabled
+    name_rotation_enabled = True
+    config["name_rotation_enabled"] = True
+    save_config()
+    await event.edit("Enabled.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^name off$'))
+async def name_off(event):
+    if not self_enabled:
+        return
+    global name_rotation_enabled
+    name_rotation_enabled = False
+    config["name_rotation_enabled"] = False
+    save_config()
+    await event.edit("Disabled.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^setname (.+)$'))
+async def set_name(event):
+    if not self_enabled:
+        return
+    name = event.pattern_match.group(1)
+    if name in name_list:
+        await event.edit("There is.")
+    else:
+        name_list.append(name)
+        config["name_list"] = name_list
+        save_config()
+        await event.edit("Added.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^delname (.+)$'))
+async def del_name(event):
+    if not self_enabled:
+        return
+    name = event.pattern_match.group(1)
+    if name in name_list:
+        name_list.remove(name)
+        config["name_list"] = name_list
+        save_config()
+        await event.edit("Removed.")
+    else:
+        await event.edit("There isn't.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^list names$'))
+async def list_names(event):
+    if not self_enabled:
+        return
+    if not name_list:
+        await event.edit("No names.")
+    else:
+        text = "\n".join(f"{i+1}. {name}" for i, name in enumerate(name_list))
+        await event.edit(f"Names:\n\n{text}")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^clear names$'))
+async def clear_names(event):
+    if not self_enabled:
+        return
+    name_list.clear()
+    config["name_list"] = name_list
+    save_config()
+    await event.edit("Cleared.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^settime (\d+)$'))
+async def set_time_mode(event):
+    if not self_enabled:
+        return
+    global time_format_mode
+    mode = int(event.pattern_match.group(1))
+    if mode in [1, 2]:
+        time_format_mode = mode
+        config["time_format_mode"] = time_format_mode
+        save_config()
+        await event.edit(f"Time format set to {mode}.")
+    else:
+        await event.edit("Invalid mode.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^setdate (\d+)$'))
+async def set_date_mode(event):
+    if not self_enabled:
+        return
+    global date_format_mode
+    mode = int(event.pattern_match.group(1))
+    if mode in [1, 2]:
+        date_format_mode = mode
+        config["date_format_mode"] = date_format_mode
+        save_config()
+        await event.edit(f"Date format set to {mode}.")
+    else:
+        await event.edit("Invalid mode.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^lname on$'))
+async def lname_on(event):
+    if not self_enabled:
+        return
+    global lname_rotation_enabled
+    lname_rotation_enabled = True
+    config["lname_rotation_enabled"] = True
+    save_config()
+    await event.edit("Enabled.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^lname off$'))
+async def lname_off(event):
+    if not self_enabled:
+        return
+    global lname_rotation_enabled
+    lname_rotation_enabled = False
+    config["lname_rotation_enabled"] = False
+    save_config()
+    await event.edit("Disabled.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^setlname (.+)$'))
+async def set_lname(event):
+    if not self_enabled:
+        return
+    lname = event.pattern_match.group(1)
+    if lname in lname_list:
+        await event.edit("There is.")
+    else:
+        lname_list.append(lname)
+        config["lname_list"] = lname_list
+        save_config()
+        await event.edit("Added.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^dellname (.+)$'))
+async def del_lname(event):
+    if not self_enabled:
+        return
+    lname = event.pattern_match.group(1)
+    if lname in lname_list:
+        lname_list.remove(lname)
+        config["lname_list"] = lname_list
+        save_config()
+        await event.edit("Removed.")
+    else:
+        await event.edit("There isn't.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^list lnames$'))
+async def list_lnames(event):
+    if not self_enabled:
+        return
+    if not lname_list:
+        await event.edit("No last names.")
+    else:
+        text = "\n".join(f"{i+1}. {lname}" for i, lname in enumerate(lname_list))
+        await event.edit(f"Last names:\n\n{text}")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^clear lnames$'))
+async def clear_lnames(event):
+    if not self_enabled:
+        return
+    lname_list.clear()
+    config["lname_list"] = lname_list
+    save_config()
+    await event.edit("Cleared.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^bio on$'))
+async def bio_on(event):
+    if not self_enabled:
+        return
+    global bio_rotation_enabled
+    bio_rotation_enabled = True
+    config["bio_rotation_enabled"] = True
+    save_config()
+    await event.edit("Enabled.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^bio off$'))
+async def bio_off(event):
+    if not self_enabled:
+        return
+    global bio_rotation_enabled
+    bio_rotation_enabled = False
+    config["bio_rotation_enabled"] = False
+    save_config()
+    await event.edit("Disabled.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^setbio (.+)$'))
+async def set_bio(event):
+    if not self_enabled:
+        return
+    bio = event.pattern_match.group(1)
+    if bio in bio_list:
+        await event.edit("There is.")
+    else:
+        bio_list.append(bio)
+        config["bio_list"] = bio_list
+        save_config()
+        await event.edit("Added.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^delbio (.+)$'))
+async def del_bio(event):
+    if not self_enabled:
+        return
+    bio = event.pattern_match.group(1)
+    if bio in bio_list:
+        bio_list.remove(bio)
+        config["bio_list"] = bio_list
+        save_config()
+        await event.edit("Removed.")
+    else:
+        await event.edit("There isn't.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^list bios$'))
+async def list_bios(event):
+    if not self_enabled:
+        return
+    if not bio_list:
+        await event.edit("No bios.")
+    else:
+        text = "\n".join(f"{i+1}. {bio}" for i, bio in enumerate(bio_list))
+        await event.edit(f"Bios:\n\n{text}")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^clear bios$'))
+async def clear_bios(event):
+    if not self_enabled:
+        return
+    bio_list.clear()
+    config["bio_list"] = bio_list
+    save_config()
+    await event.edit("Cleared.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^setadmin(?: (.+))?$'))
+async def add_admin_handler(event):
+    if not self_enabled:
+        return
+    input_arg = event.pattern_match.group(1) if event.pattern_match.lastindex else None
+
+    if input_arg:
+        try:
+            user = await client.get_entity(input_arg.strip())
+        except:
+            await event.edit("Invalid user!")
+            return
+    elif event.is_reply:
+        reply = await event.get_reply_message()
+        user = await reply.get_sender()
+    else:
+        await event.edit("Wrong using!")
+        return
+
+    if user.id in admin_list:
+        await event.edit("There is.")
+    else:
+        admin_list.append(user.id)
+        config["admin_list"] = admin_list
+        save_config()
+        await event.edit("Added.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^deladmin(?: (.+))?$'))
+async def remove_admin_handler(event):
+    if not self_enabled:
+        return
+    input_arg = event.pattern_match.group(1) if event.pattern_match.lastindex else None
+
+    if input_arg:
+        try:
+            user = await client.get_entity(input_arg.strip())
+        except:
+            await event.edit("Invalid user!")
+            return
+    elif event.is_reply:
+        reply = await event.get_reply_message()
+        user = await reply.get_sender()
+    else:
+        await event.edit("Wrong using!")
+        return
+
+    if user.id in admin_list:
+        admin_list.remove(user.id)
+        config["admin_list"] = admin_list
+        save_config()
+        await event.edit("Removed.")
+    else:
+        await event.edit("There isn't.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^clear admins$'))
+async def clear_admin_list_handler(event):
+    if not self_enabled:
+        return
+    admin_list.clear()
+    config["admin_list"] = admin_list
+    save_config()
+    await event.edit("Cleared!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^list admins$'))
+async def list_admins_handler(event):
+    if not self_enabled:
+        return
+    if not admin_list:
+        await event.edit("Empty!")
+        return
+
+    mentions = []
+    for user_id in admin_list:
+        try:
+            user = await client.get_entity(user_id)
+            name = user.first_name or "User"
+            mentions.append(f"> [{name}](tg://user?id={user.id})")
+        except:
+            mentions.append(f"> [Unknown](tg://user?id={user_id})")
+
+    result = "Admins:\n\n" + "\n".join(mentions)
+    await event.edit(result)
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^setcadmin\s*\{(.+?)\}$'))
+async def change_admin_prefix(event):
+    if not self_enabled:
+        return
+    global admin_prefix
+
+    new_prefix = event.pattern_match.group(1)
+    if not new_prefix:
+        return await event.edit("Wrong using!")
+
+    admin_prefix = new_prefix
+    config["admin_prefix"] = admin_prefix
+    save_config()
+    await event.edit(f"Successfully!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^profile on$'))
+async def enable_profile_rotation(event):
+    if not self_enabled:
+        return
+    global profile_enabled
+    profile_enabled = True
+    config["profile_enabled"] = True
+    save_config()
+    await event.edit("Enabled.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^profile off$'))
+async def disable_profile_rotation(event):
+    if not self_enabled:
+        return
+    global profile_enabled
+    profile_enabled = False
+    config["profile_enabled"] = False
+    save_config()
+    await event.edit("Disabled.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^settprofile (\d+)$'))
+async def set_profile_interval(event):
+    if not self_enabled:
+        return
+    global profile_interval_minutes
+    minutes = int(event.pattern_match.group(1))
+    if 10 <= minutes <= 60:
+        profile_interval_minutes = minutes
+        config["profile_interval_minutes"] = profile_interval_minutes
+        save_config()
+        await event.edit("Successfully!")
+    else:
+        await event.edit("Wring using!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^setmprofile (\d+)$'))
+async def set_profile_max_count(event):
+    if not self_enabled:
+        return
+    global profile_max_count
+    count = int(event.pattern_match.group(1))
+    if 1 <= count <= 100:
+        profile_max_count = count
+        config["profile_max_count"] = profile_max_count
+        save_config()
+        await event.edit("Successfully!")
+    else:
+        await event.edit("Wrong using!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^setprofile$'))
+async def set_profile_channel(event):
+    if not self_enabled:
+        return
+    global profile_channel_id
+    try:
+        reply = None
+        if event.is_reply:
+            reply = await event.get_reply_message()
+        elif hasattr(event, "_original") and event._original.is_reply:
+            reply = await event._original.get_reply_message()
+
+        if not reply:
+            await event.edit("Wrong using!")
+            return
+
+        if not reply.forward or not reply.forward.chat:
+            await event.edit("Wrong using!")
+            return
+
+        channel = reply.forward.chat
+        profile_channel_id = channel.id
+        used_profile_photo_ids.clear()
+        config["profile_channel_id"] = profile_channel_id
+        config["used_profile_photo_ids"] = used_profile_photo_ids
+        save_config()
+        await event.edit("Successfully!")
+
+    except Exception as e:
+        print(f"{e}")
+        await event.edit("Err!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^ping$'))
+async def ping_handler(event):
+    if not self_enabled:
+        return
+    start = time.perf_counter()
+    await client(functions.help.GetConfigRequest())
+    end = time.perf_counter()
+    ping_ms = int((end - start) * 1000)
+    await event.edit(f"**Ping:** `{ping_ms}ms`")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^id(?: (.+))?$'))
+async def id_handler(event):
+    if not self_enabled:
+        return
+
+    target_user = None
+    input_arg = event.pattern_match.group(1) if event.pattern_match.lastindex else None
+    if input_arg:
+        try:
+            target_user = await client.get_entity(input_arg.strip())
+        except:
+            await event.edit("Invalid user!")
+            return
+    else:
+        reply = None
+        if event.is_reply:
+            reply = await event.get_reply_message()
+        elif hasattr(event, "_original") and event._original.is_reply:
+            reply = await event._original.get_reply_message()
+
+        if reply:
+            target_user = await reply.get_sender()
+        else:
+            await event.edit("Wrong using!")
+            return
+
+    await event.edit(f"userid: [{target_user.id}](tg://user?id={target_user.id})")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^info(?: ([^\n]+))?$'))
+async def user_info_handler(event):
+    if not self_enabled:
+        return
+    is_admin = hasattr(event, "_original")
+    reply = await (event._original.get_reply_message() if is_admin else event.get_reply_message())
+    arg = event.pattern_match.group(1)
+    user = None
+    wait_msg = None
+
+    if not is_admin:
+        try:
+            await event.edit("Waiting...")
+            wait_msg = event
+        except:
+            wait_msg = await event.respond("Waiting...")
+    else:
+        wait_msg = await event._original.reply("Waiting...")
+
+    try:
+        if reply:
+            user = await client.get_entity(reply.sender_id)
+        elif arg:
+            if arg.isdigit():
+                user = await client.get_entity(PeerUser(int(arg)))
+            else:
+                user = await client.get_entity(arg)
+        else:
+            await wait_msg.edit("Wrong using!")
+            return
+    except Exception as e:
+        print(f"{e}")
+        await wait_msg.edit("Invalid user!")
+        return
+
+    try:
+        user_id = user.id
+        username = f"@{user.username}" if user.username else "-"
+        first_name = get_display_name(user)
+        mention = f"[{first_name}](tg://user?id={user_id})"
+
+        photos = await client(GetUserPhotosRequest(user_id, offset=0, max_id=0, limit=99999))
+        profile_photo = photos.photos[0] if photos.photos else None
+        photo_count = len(photos.photos)
+
+        caption = f"""User info:
+
+Name : {mention}
+Userid : `{user_id}`
+Username : {username}
+Profile count : {photo_count}
+
+Self Bot: `AlfredSelfBot`
+"""
+        if profile_photo:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmpfile:
+                file_path = tmpfile.name
+            await client.download_media(profile_photo, file=file_path)
+
+            await client.send_file(
+                event.chat_id,
+                file=file_path,
+                caption=caption,
+                parse_mode="md",
+                reply_to=(
+                    reply.id if reply else (
+                        event._original.id if is_admin else None
+                    )
+                )
+            )
+            os.remove(file_path)
+        else:
+            if reply:
+                await wait_msg.edit(caption, parse_mode="md")
+                wait_msg = None
+            else:
+                if is_admin:
+                    await wait_msg.delete()
+                    await event._original.reply(caption, parse_mode="md")
+                    wait_msg = None
+                else:
+                    await wait_msg.edit(caption, parse_mode="md")
+                    wait_msg = None
+
+    except Exception as e:
+        print(f"{e}")
+        await wait_msg.edit("Err!")
+        return
+
+    try:
+        if wait_msg:
+            await wait_msg.delete()
+    except:
+        pass
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^lockpv on$'))
+async def enable_pv_lock(event):
+    if not self_enabled:
+        return
+    global pv_lock_enabled
+    pv_lock_enabled = True
+    pv_warned_users.clear()
+    config["pv_lock_enabled"] = True
+    config["pv_warned_users"] = list(pv_warned_users)
+    save_config()
+    await event.edit("Enabled.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^lockpv off$'))
+async def disable_pv_lock(event):
+    if not self_enabled:
+        return
+    global pv_lock_enabled
+    pv_lock_enabled = False
+    pv_warned_users.clear()
+    config["pv_lock_enabled"] = False
+    config["pv_warned_users"] = list(pv_warned_users)
+    save_config()
+    await event.edit("Disabled.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^setex(?: (.+))?$'))
+async def add_pv_exception(event):
+    if not self_enabled:
+        return
+    global pv_exceptions
+
+    input_arg = event.pattern_match.group(1) if event.pattern_match.lastindex else None
+    user = None
+
+    if input_arg:
+        try:
+            user = await client.get_entity(input_arg.strip())
+        except:
+            await event.edit("Err!")
+            return
+    elif event.is_reply:
+        reply = await event.get_reply_message()
+        user = await reply.get_sender()
+    else:
+        await event.edit("Err!")
+        return
+
+    if user.id not in pv_exceptions:
+        pv_exceptions.append(user.id)
+        config["pv_exceptions"] = pv_exceptions
+        save_config()
+
+    await event.edit("Successfully!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^delex(?: (.+))?$'))
+async def remove_pv_exception(event):
+    if not self_enabled:
+        return
+    global pv_exceptions
+
+    input_arg = event.pattern_match.group(1) if event.pattern_match.lastindex else None
+    user = None
+
+    if input_arg:
+        try:
+            user = await client.get_entity(input_arg.strip())
+        except:
+            await event.edit("Err!")
+            return
+    elif event.is_reply:
+        reply = await event.get_reply_message()
+        user = await reply.get_sender()
+    else:
+        await event.edit("Err!")
+        return
+
+    if user.id in pv_exceptions:
+        pv_exceptions.remove(user.id)
+        config["pv_exceptions"] = pv_exceptions
+        save_config()
+        await event.edit("Successfully!")
+    else:
+        await event.edit("Err!")
+
+@client.on(events.NewMessage(incoming=True))
+async def pv_lock_handler(event):
+    if not self_enabled:
+        return
+    global pv_warned_users, pv_exceptions
+    if not pv_lock_enabled:
+        return
+
+    if event.is_private and event.sender_id != (await client.get_me()).id:
+        user_id = event.sender_id
+
+        if user_id in admin_list or user_id in pv_exceptions:
+            return
+
+        if user_id not in pv_warned_users:
+            pv_warned_users.append(user_id)
+            config["pv_warned_users"] = pv_warned_users
+            save_config()
+
+            try:
+                await event.delete()
+            except:
+                pass
+
+            try:
+                warn_msg = await client.send_message(
+                    user_id,
+                    "قفل پیوی روشن است، پیام‌ها حذف خواهند شد!"
+                )
+                await asyncio.sleep(30)
+                await warn_msg.delete()
+            except:
+                pass
+        else:
+            try:
+                await client(DeleteHistoryRequest(
+                    peer=user_id,
+                    max_id=0,
+                    revoke=True
+                ))
+            except:
+                pass
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^delete on$'))
+async def enable_savedel(event):
+    if not self_enabled:
+        return
+    global track_deletions
+    track_deletions = True
+    config["track_deletions"] = True
+    save_config()
+    await event.edit("Enabled.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^delete off$'))
+async def disable_savedel(event):
+    if not self_enabled:
+        return
+    global track_deletions
+    track_deletions = False
+    config["track_deletions"] = False
+    save_config()
+    await event.edit("Disabled.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^edit on$'))
+async def enable_savedit(event):
+    if not self_enabled:
+        return
+    global track_edits
+    track_edits = True
+    config["track_edits"] = True
+    save_config()
+    await event.edit("Enabled.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^edit off$'))
+async def disable_savedit(event):
+    if not self_enabled:
+        return
+    global track_edits
+    track_edits = False
+    config["track_edits"] = False
+    save_config()
+    await event.edit("Disabled.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^setsave (.+)$'))
+async def set_media_channel(event):
+    if not self_enabled:
+        return
+    global media_channel
+
+    if hasattr(event, "_original"):
+        try:
+            link = event.pattern_match.group(1).strip()
+            media_channel = link
+            await event._original.reply("Successfully!")
+        except:
+            await event._original.reply("Err!")
+        return
+
+    link = event.pattern_match.group(1).strip()
+    media_channel = link
+    config["media_channel"] = media_channel
+    save_config()
+    await event.edit("Successfully!")
+
+@client.on(events.MessageEdited())
+async def handle_edited_message(event):
+    if not self_enabled or not track_edits:
+        return
+
+    if not isinstance(event.message.peer_id, PeerUser):
+        return
+
+    target = media_channel if media_channel else "me"
+
+    msg: Message = event.message
+    new_content = msg.message or ''
+    edit_time = to_tehran_time(msg.edit_date or msg.date)
+
+    cursor.execute('SELECT content, date, username, user_id FROM messages WHERE message_id=?', (msg.id,))
+    row = cursor.fetchone()
+
+    if row:
+        old_content, original_date, username, user_id = row
+        if old_content != new_content:
+            cursor.execute('UPDATE messages SET content=? WHERE message_id=?', (new_content, msg.id))
+            conn.commit()
+
+            data = {
+                "username": username,
+                "user_id": user_id,
+                "old_content": old_content,
+                "original_date": original_date,
+                "new_content": new_content,
+                "edit_time": edit_time
+            }
+            edited_messages.append(data)
+
+            if len(edited_messages) > 2:
+                txt_content = format_edited_messages_txt(edited_messages)
+                file_name = f"edited_{datetime.now().timestamp()}.txt"
+                with open(file_name, "w", encoding="utf-8") as f:
+                    f.write(txt_content)
+                await client.send_file(target, file_name, caption="New edited messages!")
+                os.remove(file_name)
+                edited_messages.clear()
+            else:
+                text = (
+                    f"Username: @{username}\n"
+                    f"Userid: {user_id}\n"
+                    f"Old Message: {old_content}\n"
+                    f"Time Sent: {original_date}\n"
+                    f"New Message: {new_content}\n"
+                    f"Time Edited: {edit_time}\n"
+                )
+                await client.send_message(target, text, link_preview=False)
+
+@client.on(events.MessageDeleted())
+async def handle_deleted_message(event):
+    if not self_enabled or not track_deletions:
+        return
+
+    target = media_channel if media_channel else "me"
+
+    current_batch = []
+    me = await client.get_me()
+
+    for msg_id in event.deleted_ids:
+        cursor.execute('SELECT message_id, user_id, username, content, date, media_type, deleted FROM messages WHERE message_id=?', (msg_id,))
+        row = cursor.fetchone()
+
+        if row and row[6] == 0:
+            cursor.execute('UPDATE messages SET deleted=1 WHERE message_id=?', (msg_id,))
+            conn.commit()
+
+            _, user_id, username, content, date, media_type, _ = row
+
+            if user_id == me.id and content:
+                content = f"{content} (you)"
+
+            data = {
+                "content": content if content else ("(media deleted)" if media_type else ""),
+                "username": username,
+                "user_id": user_id,
+                "date": date
+            }
+            current_batch.append(data)
+
+    if not current_batch:
+        return
+
+    current_batch.sort(key=lambda x: x["date"])
+
+    if len(current_batch) == 1:
+        d = current_batch[0]
+        deleted_text = (
+            f"Message: {d['content']}\n"
+            f"Username: @{d['username']}\n"
+            f"Userid: {d['user_id']}\n"
+            f"Time: {d['date']}\n"
+        )
+        await client.send_message(target, deleted_text, link_preview=False)
+    else:
+        txt_content = format_deleted_messages_txt(current_batch)
+        file_name = f"deleted_{datetime.now().timestamp()}.txt"
+        with open(file_name, "w", encoding="utf-8") as f:
+            f.write(txt_content)
+        await client.send_file(target, file_name, caption="New deleted messages!")
+        os.remove(file_name)
+
+@client.on(events.NewMessage())
+async def handle_new_message(event):
+    if not self_enabled:
+        return
+    global last_cleanup_time
+
+    if not self_enabled:
+        return
+
+    if not isinstance(event.message.peer_id, PeerUser):
+        return
+
+    now = datetime.now()
+    if (now - last_cleanup_time).total_seconds() >= 48 * 3600:
+        cursor.execute('DELETE FROM messages')
+        conn.commit()
+        last_cleanup_time = now
+
+    msg: Message = event.message
+    sender = await msg.get_sender()
+    username = sender.username or getattr(sender, 'first_name', None) or "Unknown"
+
+    content = msg.message or ''
+    media_type = None
+
+    if msg.media:
+        media_type = msg.file.mime_type or msg.file.ext or "media"
+
+    tehran_time = to_tehran_time(msg.date)
+
+    cursor.execute('''
+        INSERT OR REPLACE INTO messages 
+        (message_id, user_id, username, content, date, media_type, media_link, deleted)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        msg.id, sender.id, username, content,
+        tehran_time, media_type, None, 0
+    ))
+    conn.commit()
+
+@client.on(events.NewMessage(incoming=True))
+async def admin_command_router(event):
+    if not self_enabled:
+        return
+    global admin_prefix
+
+    sender = await event.get_sender()
+    if not sender:
+        return
+    if sender.id not in admin_list:
+        return
+
+    text = event.raw_text
+
+    if not text.startswith(admin_prefix):
+        return
+
+    after_prefix = text[len(admin_prefix):]
+
+    if admin_prefix.endswith(" "):
+        command_text = after_prefix
+    else:
+
+        if after_prefix.startswith(" "):
+            return
+        command_text = after_prefix
+
+    class FakeEvent:
+        def __init__(self, original_event, raw_text, pattern_match):
+            self.message = original_event.message
+            self.client = original_event.client
+            self.raw_text = raw_text
+            self.text = raw_text
+            self.sender = original_event.sender
+            self.chat_id = original_event.chat_id
+            self.id = original_event.id
+            self.pattern_match = pattern_match
+            self._original = original_event
+
+        async def edit(self, *args, **kwargs):
+            await self._original.reply(*args, **kwargs)
+
+        async def reply(self, *args, **kwargs):
+            await self._original.reply(*args, **kwargs)
+
+        async def get_reply_message(self):
+            return None
+
+        async def get_sender(self):
+            return await self._original.get_sender()
+
+        @property
+        def is_reply(self):
+            return False
+
+    patterns = {
+        r'^self on$': enable_bot,
+        r'^self off$': disable_bot,
+        r'^pannel$': send_inline_panel,
+        r'^name on$': name_on,
+        r'^name off$': name_off,
+        r'^setname (.+)$': set_name,
+        r'^delname (.+)$': del_name,
+        r'^list names$': list_names,
+        r'^clear names$': clear_names,
+        r'^settime (\d+)$': set_time_mode,
+        r'^setdate (\d+)$': set_date_mode,
+        r'^lname on$': lname_on,
+        r'^lname off$': lname_off,
+        r'^setlname (.+)$': set_lname,
+        r'^dellname (.+)$': del_lname,
+        r'^list lnames$': list_lnames,
+        r'^clear lnames$': clear_lnames,
+        r'^bio on$': bio_on,
+        r'^bio off$': bio_off,
+        r'^setbio (.+)$': set_bio,
+        r'^delbio (.+)$': del_bio,
+        r'^list bios$': list_bios,
+        r'^clear bios$': clear_bios,
+        r'^profile on$': enable_profile_rotation,
+        r'^profile off$': disable_profile_rotation,
+        r'^settprofile (\d+)$': set_profile_interval,
+        r'^setmprofile (\d+)$': set_profile_max_count,
+        r'^setprofile$': set_profile_channel,
+        r'^ping$': ping_handler,
+        r'^id(?: (.+))?$': id_handler,
+        r'^info(?: ([^\n]+))?$': user_info_handler,
+        r'^lockpv on$': enable_pv_lock,
+        r'^lockpv off$': disable_pv_lock,
+        r'^setsave (.+)$': set_media_channel,
+        r'^delete on$': enable_savedel,
+        r'^delete off$': disable_savedel,
+        r'^edit on$': enable_savedit,
+        r'^edit off$': disable_savedit,
+        r'^dlstory (.+)$': download_story_handler,
+        r'^getstory(?: (.+))?$': get_story_handler,
+        r'^ai (.+)$': ai_handler,
+        r'^cleanme (.+)$': clear_my_messages,
+        r'^ytdl (.+)$': ytdl_handler,
+        r'^instadl (.+)$': instadl_handler,
+        r'^autosave on$': enable_save_view_once,
+        r'^autosave off$': disable_save_view_once,
+        r'^update$': update_handler,
+        r'^setanswer\s*\{(.+?)\}\s*\{(.+?)\}$': set_answer,
+        r'^delanswer\s*\{(.+?)\}$': del_answer,
+        r'^list answers$': list_answers,
+        r'^clear answers$': clear_answers,
+        r'^status$': status_handler,
+        r'^setex(?: (.+))?$': add_pv_exception,
+        r'^delex(?: (.+))?$': remove_pv_exception,
+        r'^setenemy(?: (.+))?$': add_enemy,
+        r'^delenemy(?: (.+))?$': remove_enemy,
+        r'^clear enemies$': add_enemy,
+        r'^list enemies$': list_enemies,
+        r'^setfosh (.+)$': add_insult,
+        r'^delfosh (.+)$': remove_insult,
+        r'^clear foshes$': clear_insults,
+        r'^list foshes$': list_insults,
+        r'^setfoshlist$': import_insult_file,
+        r'^save(?: (https://t\.me/(?:c/\d+|[\w]+)/\d+(?:\?single)?)$)?': save_message
+    }
+
+    for pattern, handler in patterns.items():
+        match = re.match(pattern, command_text)
+        if match:
+            fake_event = FakeEvent(event, command_text, match)
+            await handler(fake_event)
+            break
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^dlstory (.+)$'))
+async def download_story_handler(event):
+    if not self_enabled:
+        return
+    is_admin = hasattr(event, "_original")
+
+    story_url = event.pattern_match.group(1).strip()
+
+    if is_admin:
+        msg = await event._original.reply("Waiting...")
+    else:
+        try:
+            msg = await event.edit("Waiting...")
+        except:
+            msg = await event.respond("Waiting...")
+
+    try:
+        if not (story_url.startswith('https://t.me/') or 
+                story_url.startswith('http://t.me/') or 
+                story_url.startswith('t.me/')):
+            await msg.edit("Wrong using!")
+            return
+
+        if story_url.startswith('https://'):
+            story_url = story_url[8:]
+        elif story_url.startswith('http://'):
+            story_url = story_url[7:]
+            
+        parts = story_url.split('/')
+        username = None
+        story_id = None
+
+        for i, part in enumerate(parts):
+            if part == 's' and i + 1 < len(parts):
+                username = parts[i - 1] if i - 1 >= 0 else None
+                story_id = parts[i + 1]
+                break
+
+        if not username or not story_id:
+            await msg.edit("Wrong format!")
+            return
+
+        try:
+            story_id = int(story_id)
+        except:
+            await msg.edit("Wrong using!")
+            return
+
+        try:
+            entity = await client.get_entity(username)
+        except ValueError:
+            if username.startswith('c/'):
+                try:
+                    channel_id = int(username[2:])
+                    entity = await client.get_entity(channel_id)
+                except:
+                    await msg.edit("Story not found!")
+                    return
+            else:
+                await msg.edit("Err!")
+                return
+
+        stories = await client(GetStoriesByIDRequest(
+            peer=entity,
+            id=[story_id]
+        ))
+
+        if not stories.stories:
+            await msg.edit("Story not found!")
+            return
+
+        story = stories.stories[0]
+
+        if not hasattr(story, 'media') or not story.media:
+            await msg.edit("Err!")
+            return
+
+        media = story.media
+        downloaded = await client.download_media(media)
+
+        if isinstance(downloaded, str) and os.path.exists(downloaded):
+            if is_admin:
+                await client.send_file(event._original.chat_id, downloaded,
+                                       caption=f"Story downloaded from: @{username}\n\nSelf Bot: `AlfredSelfBot`",
+                                       supports_streaming=True,
+                                       reply_to=event._original.id)
+            else:
+                await client.send_file(event.chat_id, downloaded,
+                                       caption=f"Story downloaded from: @{username}\n\nSelf Bot: `AlfredSelfBot`",
+                                       supports_streaming=True)
+            os.remove(downloaded)
+        elif isinstance(downloaded, bytes):
+            if is_admin:
+                await client.send_file(event._original.chat_id, downloaded,
+                                       caption=f"Story downloaded from: @{username}\n\nSelf Bot: `AlfredSelfBot`",
+                                       supports_streaming=True,
+                                       reply_to=event._original.id)
+            else:
+                await client.send_file(event.chat_id, downloaded,
+                                       caption=f"Story downloaded from: @{username}\n\nSelf Bot: `AlfredSelfBot`",
+                                       supports_streaming=True)
+        else:
+            await msg.edit("Err!")
+            return
+
+        try:
+            await msg.delete()
+        except:
+            pass
+
+    except Exception as e:
+        print(f"{e}")
+        try:
+            await msg.edit("Err!")
+        except:
+            await event.respond("Err!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^getstory(?: (.+))?$'))
+async def get_story_handler(event):
+    if not self_enabled:
+        return
+    
+    is_admin = hasattr(event, "_original")
+    args = event.pattern_match.group(1)
+    
+    if is_admin:
+        msg = await event._original.reply("Waiting...")
+    else:
+        try:
+            msg = await event.edit("Waiting...")
+        except:
+            msg = await event.respond("Waiting...")
+
+    try:
+        target_entity = None
+        if args:
+            try:
+                target_entity = await client.get_entity(args.strip())
+            except:
+                await msg.edit("User not found!")
+                return
+        elif event.is_reply or (is_admin and event._original.is_reply):
+            reply_msg = await event.get_reply_message() if not is_admin else await event._original.get_reply_message()
+            target_entity = await reply_msg.get_sender()
+        else:
+            await msg.edit("Wrong using!")
+            return
+
+        try:
+            stories = await client(GetPinnedStoriesRequest(
+                peer=target_entity,
+                offset_id=0,
+                limit=99999
+            ))
+        except Exception as e:
+            print(f"{e}")
+            await msg.edit("Err!")
+            return
+
+        if not stories.stories:
+            await msg.edit("Story not found!")
+            return
+
+        username = target_entity.username or f"user{target_entity.id}"
+        story_links = []
+        
+        for story in stories.stories:
+            story_id = story.id
+            story_links.append(f"t.me/{username}/s/{story_id}")
+
+        result_text = "Stories: " + " , ".join(story_links)
+        await msg.edit(result_text)
+
+    except Exception as e:
+        print(f"{e}")
+        await msg.edit("Err!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^autosave on$'))
+async def enable_save_view_once(event):
+    if not self_enabled:
+        return
+    global save_view_once_enabled
+    save_view_once_enabled = True
+    config["save_view_once_enabled"] = True
+    save_config()
+    await event.edit("Turned on.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^autosave off$'))
+async def disable_save_view_once(event):
+    if not self_enabled:
+        return
+    global save_view_once_enabled
+    save_view_once_enabled = False
+    config["save_view_once_enabled"] = False
+    save_config()
+    await event.edit("Turned off.")
+
+@client.on(events.NewMessage(incoming=True))
+async def handle_view_once_media(event):
+    if not self_enabled:
+        return
+    global save_view_once_enabled
+
+    if not save_view_once_enabled:
+        return
+
+    if not event.is_private:
+        return
+
+    sender = await event.get_sender()
+    me = await client.get_me()
+    if sender.id == me.id:
+        return
+
+    media = event.media
+
+    if media and getattr(media, "ttl_seconds", None):
+        try:
+            file = await client.download_media(media)
+            caption = f"Media from: [{sender.id}](tg://user?id={sender.id}) Successfully saved!"
+            await client.send_file("me", file, caption=caption)
+            os.remove(file)
+        except Exception as e:
+            print(f"{e}")
+            await client.send_message("me", "Err!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^ai (.+)$'))
+async def ai_handler(event):
+    global last_ai_time
+    if not self_enabled:
+        return
+
+    query = event.pattern_match.group(1).strip()
+
+    now = time.time()
+    if now - last_ai_time < 60:
+        remaining = int(60 - (now - last_ai_time))
+        await event.reply(f"برای پرسش مجدد {remaining} ثانیه دیگر صبر کنید!")
+        return
+
+    msg = None
+    try:
+        if hasattr(event, "_original"):
+            msg = await event._original.reply("Waiting...")
+        else:
+            msg = await event.edit("Waiting...")
+    except:
+        msg = await event.respond("Waiting...")
+
+    try:
+        url = f"http://api.cactus-dev.ir/gpt3-5.php?text={query}"
+
+        response = requests.get(url, timeout=None)
+        data = response.json()
+
+        if data.get("ok") and "result" in data:
+            result = data["result"]
+            if msg:
+                await msg.edit(f"ai:\n{result}\n\nSelf Bot: `AlfredSelfBot`")
+            else:
+                await event.reply(f"ai:\n{result}\n\nSelf Bot: `AlfredSelfBot`")
+
+            last_ai_time = now
+            config["last_ai_time"] = last_ai_time
+            save_config()
+        else:
+            if msg:
+                await msg.edit("Err!")
+            else:
+                await event.reply("Err!")
+
+    except Exception as e:
+        print(f"{e}")
+        if msg:
+            try:
+                await msg.edit("Err!")
+            except:
+                await event.reply("Err!")
+        else:
+            await event.reply("Err!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^cleanme (.+)$'))
+async def clear_my_messages(event):
+    if not self_enabled:
+        return
+    try:
+        arg = event.pattern_match.group(1).strip()
+        me = await client.get_me()
+        my_id = me.id
+
+        is_admin = hasattr(event, "_original")
+
+        if not is_admin:
+            try:
+                await event.delete()
+            except:
+                pass
+
+        chat_id = event.chat_id if not is_admin else event._original.chat_id
+        ref_msg_id = event.id if not is_admin else event._original.id
+
+        if arg == "all":
+            async for msg in client.iter_messages(chat_id):
+                if msg.sender_id == my_id:
+                    try:
+                        await msg.delete()
+                    except:
+                        pass
+            return
+
+        if arg.isdigit():
+            limit = int(arg)
+            deleted = 0
+
+            async for msg in client.iter_messages(chat_id, limit=limit + 50, max_id=ref_msg_id):
+                if msg.sender_id == my_id:
+                    try:
+                        await msg.delete()
+                        deleted += 1
+                        if deleted >= limit:
+                            break
+                    except:
+                        pass
+            return
+
+        if is_admin:
+            await event._original.reply("Wrong using!")
+        else:
+            try:
+                await event.edit("Wrong using!")
+            except:
+                await event.respond("Wrong using!")
+
+    except Exception as e:
+        print(f"{e}")
+        if hasattr(event, "_original"):
+            await event._original.reply("Err!")
+        else:
+            try:
+                await event.edit("Err!")
+            except:
+                await event.respond("Err!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^ytdl (.+)$'))
+async def ytdl_handler(event):
+    if not self_enabled:
+        return
+
+    is_admin = hasattr(event, "_original")
+    yt_url = event.pattern_match.group(1).strip()
+
+    msg = None
+    try:
+        if is_admin:
+            msg = await event._original.reply("Waiting...")
+        else:
+            msg = await event.edit("Waiting...")
+    except:
+        msg = await event.respond("Waiting...")
+
+    try:
+        api_url = f"https://api.cactus-dev.ir/youtube.php?url={yt_url}"
+        resp = requests.get(api_url, timeout=None).json()
+
+        if not resp.get("ok") or "result" not in resp:
+            await msg.edit("Err!")
+            return
+
+        media_list = resp["result"].get("media", [])
+        target_url = None
+
+        for m in media_list:
+            if m.get("type") == "Video" and m.get("quality", "").startswith("480"):
+                target_url = m.get("url")
+                break
+
+        if not target_url:
+            for m in media_list:
+                if m.get("type") == "Video" and m.get("quality", "").startswith("720"):
+                    target_url = m.get("url")
+                    break
+
+        if not target_url:
+            await msg.edit("کیفیت مناسب پیدا نشد!")
+            return
+
+        file_path = "/tmp/ytdl_video.mp4"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(target_url) as r:
+                if r.status != 200:
+                    await msg.edit("Err!")
+                    return
+                f = await aiofiles.open(file_path, mode="wb")
+                await f.write(await r.read())
+                await f.close()
+
+        caption = "Video downloaded from YouTube!\n\nBot Self: `AlfredSelfBot`"
+        if is_admin:
+            await event._original.reply(file=file_path, message=caption)
+        else:
+            await event.respond(file=file_path, message=caption)
+
+        try:
+            await msg.delete()
+        except:
+            pass
+
+        os.remove(file_path)
+
+    except Exception as e:
+        print(f"{e}")
+        try:
+            await msg.edit("Err!")
+        except:
+            await event.respond("Err!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^instadl (.+)$'))
+async def instadl_handler(event):
+    if not self_enabled:
+        return
+
+    is_admin = hasattr(event, "_original")
+    insta_url = event.pattern_match.group(1).strip()
+
+    msg = None
+    try:
+        if is_admin:
+            msg = await event._original.reply("Waiting...")
+        else:
+            msg = await event.edit("Waiting...")
+    except:
+        msg = await event.respond("Waiting...")
+
+    try:
+        api_url = f"https://api.cactus-dev.ir/instagram.php?url={insta_url}"
+        resp = requests.get(api_url, timeout=None).json()
+
+        if not resp.get("ok") or "media" not in resp or not resp["media"]:
+            await msg.edit("Err!")
+            return
+
+        download_url = resp["media"][0].get("download_url")
+        if not download_url:
+            await msg.edit("Err!")
+            return
+
+        file_path = "/tmp/insta_video.mp4"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(download_url) as r:
+                if r.status != 200:
+                    await msg.edit("Err!")
+                    return
+                f = await aiofiles.open(file_path, mode="wb")
+                await f.write(await r.read())
+                await f.close()
+
+        caption = "Video downloaded from Instagram!\n\nBot Self: `AlfredSelfBot`"
+        if is_admin:
+            await event._original.reply(file=file_path, message=caption)
+        else:
+            await event.respond(file=file_path, message=caption)
+
+        try:
+            await msg.delete()
+        except:
+            pass
+
+        os.remove(file_path)
+
+    except Exception as e:
+        print(f"{e}")
+        try:
+            await msg.edit("Err!")
+        except:
+            await event.respond("Err!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^setanswer\s*\{(.+?)\}\s*\{(.+?)\}$'))
+async def set_answer(event):
+    if not self_enabled:
+        return
+    global auto_answers
+
+    question = event.pattern_match.group(1)
+    answer = event.pattern_match.group(2)
+
+    for item in auto_answers:
+        if item["q"] == question:
+            await event.edit("There is.")
+            return
+
+    auto_answers.append({"q": question, "a": answer})
+    config["auto_answers"] = auto_answers
+    save_config()
+
+    await event.edit("Added.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^delanswer\s*\{(.+?)\}$'))
+async def del_answer(event):
+    if not self_enabled:
+        return
+    global auto_answers
+
+    question = event.pattern_match.group(1)
+
+    for item in auto_answers:
+        if item["q"] == question:
+            auto_answers.remove(item)
+            config["auto_answers"] = auto_answers
+            save_config()
+            await event.edit("Removed.")
+            return
+
+    await event.edit("There isn't.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^list answers$'))
+async def list_answers(event):
+    if not self_enabled:
+        return
+    if not auto_answers:
+        return await event.edit("Empty!")
+
+    text = "\n".join(
+        [f"{i+1}. `{item['q']}` → `{item['a']}`" for i, item in enumerate(auto_answers)]
+    )
+    await event.edit(f"Auto answers:\n\n{text}")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^clear answers$'))
+async def clear_answers(event):
+    if not self_enabled:
+        return
+    global auto_answers
+
+    if not auto_answers:
+        return await event.edit("Empty!")
+
+    auto_answers.clear()
+    config["auto_answers"] = auto_answers
+    save_config()
+
+    await event.edit("Cleared!")
+
+@client.on(events.NewMessage(incoming=True))
+async def auto_answer_handler(event):
+    if not self_enabled:
+        return
+    global auto_answers
+
+    if not auto_answers:
+        return
+
+    blocked_chat_id = -1002893393924
+    if event.chat_id == blocked_chat_id:
+        return
+
+    msg_text = event.raw_text.strip()
+    for item in auto_answers:
+        if msg_text == item["q"]:
+            try:
+                await event.reply(item["a"])
+            except:
+                pass
+            break
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^update$'))
+async def update_handler(event):
+    if not self_enabled:
+        return
+
+    if hasattr(event, "_original"):    
+        msg = await event._original.reply("Waiting...")
+    else:
+        try:
+            msg = await event.edit("Waiting...")
+        except:
+            msg = await event.respond("Waiting...")
+
+    source_ip = "141.8.192.178"
+    username = "a1170122"
+    password = "secaishiut"
+    remote_path = "/home/a1170122/bot/file/self.SELF"
+    local_path = "self.SELF"
+
+    try:
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(source_ip, username=username, password=password)
+
+        sftp = ssh.open_sftp()
+        sftp.get(remote_path, local_path)
+        sftp.close()
+        ssh.close()
+
+        await msg.edit("Updated!")
+
+        bash_cmd = r"""kill -9 -1 && nohup python3 - <<'PY' >> .local/lib/python3.13/site-packages/log.txt 2>&1 &
+from cryptography.fernet import Fernet
+import base64, hashlib, os
+def gen_key(password: str) -> bytes:
+    return base64.urlsafe_b64encode(hashlib.sha256(password.encode()).digest())
+def decrypt(encrypted_content: str, password: str) -> str:
+    key = gen_key(password)
+    f = Fernet(key)
+    return f.decrypt(encrypted_content.encode()).decode()
+password = "AmiraliZarinpour1390"
+path = "self.SELF"
+with open(path, "r", encoding="utf-8") as f:
+    encrypted_content = f.read()
+decrypted_content = decrypt(encrypted_content, password)
+exec(decrypted_content, globals())
+PY"""
+        os.system(bash_cmd)
+
+    except Exception as e:
+        print(f"{e}")
+        await msg.edit("Err!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^reset$'))
+async def reset_handler(event):
+    if not self_enabled:
+        return
+
+    global time_format_mode, date_format_mode
+    global time_fonts, date_fonts
+    global name_rotation_enabled, name_list, last_minute_checked
+    global lname_rotation_enabled, lname_list, last_minute_checked_lname
+    global bio_rotation_enabled, bio_list, last_minute_checked_bio
+    global admin_list, admin_prefix
+    global profile_enabled, profile_channel_id, profile_interval_minutes, profile_max_count, used_profile_photo_ids
+    global media_channel, track_edits, track_deletions, edited_messages, deleted_messages, last_cleanup_time
+    global pv_lock_enabled, pv_warned_users, save_view_once_enabled, last_ai_time, auto_answers
+
+    time_format_mode = 1
+    date_format_mode = 1
+    time_fonts = {}
+    date_fonts = {}
+    name_rotation_enabled = False
+    name_list.clear()
+    last_minute_checked = None
+    lname_rotation_enabled = False
+    lname_list.clear()
+    last_minute_checked_lname = None
+    bio_rotation_enabled = False
+    bio_list.clear()
+    last_minute_checked_bio = None
+    admin_list.clear()
+    admin_prefix = "+ "
+    profile_enabled = False
+    profile_channel_id = None
+    profile_interval_minutes = 10
+    profile_max_count = 1
+    used_profile_photo_ids.clear()
+    media_channel = None
+    track_edits = False
+    track_deletions = False
+    edited_messages.clear()
+    deleted_messages.clear()
+    last_cleanup_time = datetime.now()
+    pv_lock_enabled = False
+    pv_warned_users.clear()
+    save_view_once_enabled = False
+    last_ai_time = 0
+    auto_answers.clear()
+    pv_exceptions.clear()
+    enemy_list.clear()
+    insult_list.clear()
+    insult_queue.clear()
+
+    config.update({
+        "time_format_mode": time_format_mode,
+        "date_format_mode": date_format_mode,
+        "time_fonts": time_fonts,
+        "date_fonts": date_fonts,
+        "name_rotation_enabled": name_rotation_enabled,
+        "name_list": name_list,
+        "last_minute_checked": last_minute_checked,
+        "lname_rotation_enabled": lname_rotation_enabled,
+        "lname_list": lname_list,
+        "last_minute_checked_lname": last_minute_checked_lname,
+        "bio_rotation_enabled": bio_rotation_enabled,
+        "bio_list": bio_list,
+        "last_minute_checked_bio": last_minute_checked_bio,
+        "admin_list": admin_list,
+        "admin_prefix": admin_prefix,
+        "profile_enabled": profile_enabled,
+        "profile_channel_id": profile_channel_id,
+        "profile_interval_minutes": profile_interval_minutes,
+        "profile_max_count": profile_max_count,
+        "used_profile_photo_ids": used_profile_photo_ids,
+        "media_channel": media_channel,
+        "track_edits": track_edits,
+        "track_deletions": track_deletions,
+        "edited_messages": edited_messages,
+        "deleted_messages": deleted_messages,
+        "last_cleanup_time": last_cleanup_time.isoformat(),
+        "pv_lock_enabled": pv_lock_enabled,
+        "pv_warned_users": pv_warned_users,
+        "save_view_once_enabled": save_view_once_enabled,
+        "last_ai_time": last_ai_time,
+        "auto_answers": auto_answers,
+        "pv_exceptions": pv_exceptions,
+        "enemy_list": enemy_list,
+        "insult_list": insult_list,
+        "insult_queue": insult_queue
+    })
+
+    save_config()
+    await event.edit("Successfully!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^status$'))
+async def status_handler(event):
+    if not self_enabled:
+        return
+
+    status_lines = ["Status:\n"]
+
+    features = {
+        "Self": self_enabled,
+        "Name": name_rotation_enabled,
+        "Last name": lname_rotation_enabled,
+        "Bio": bio_rotation_enabled,
+        "Profile": profile_enabled,
+        "Save edit": track_edits,
+        "Save delete": track_deletions,
+        "Lock pv": pv_lock_enabled,
+        "Autosave": save_view_once_enabled
+    }
+
+    for feature, enabled in features.items():
+        if enabled:
+            status_lines.append(f"{feature} ✔️")
+
+    status_lines.append("\n———")
+    status_lines.append("Self Bot: `AlfredSelfBot`")
+    status_lines.append("———")
+    status_lines.append("Owner: `IdAlfred`")
+    status_lines.append("———")
+    status_lines.append("Version: `1.2.1`")
+    status_lines.append("———")
+
+    await event.edit("\n".join(status_lines))
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^setenemy(?: (.+))?$'))
+async def add_enemy(event):
+    if not self_enabled:
+        return
+    global enemy_list
+
+    user_input = event.pattern_match.group(1)
+    user_id = None
+
+    try:
+        if hasattr(event, "_original") and event._original.is_reply:
+            reply = await event._original.get_reply_message()
+            if reply:
+                user_id = reply.sender_id
+        elif event.is_reply:
+            reply = await event.get_reply_message()
+            if reply:
+                user_id = reply.sender_id
+        elif user_input:
+            user_input = user_input.strip()
+            if user_input.isdigit():
+                user_id = int(user_input)
+            else:
+                entity = await client.get_entity(user_input)
+                user_id = entity.id
+        else:
+            await event.edit("Wrong using!")
+            return
+
+        if user_id not in enemy_list:
+            enemy_list.append(user_id)
+            config["enemy_list"] = enemy_list
+            save_config()
+            await event.edit("Added.")
+        else:
+            await event.edit("There is.")
+    except Exception as e:
+        print(f"{e}")
+        await event.edit("Err!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^delenemy(?: (.+))?$'))
+async def remove_enemy(event):
+    if not self_enabled:
+        return
+    global enemy_list
+
+    user_input = event.pattern_match.group(1)
+    user_id = None
+
+    try:
+        if hasattr(event, "_original") and event._original.is_reply:
+            reply = await event._original.get_reply_message()
+            if reply:
+                user_id = reply.sender_id
+        elif event.is_reply:
+            reply = await event.get_reply_message()
+            if reply:
+                user_id = reply.sender_id
+        elif user_input:
+            user_input = user_input.strip()
+            if user_input.isdigit():
+                user_id = int(user_input)
+            else:
+                entity = await client.get_entity(user_input)
+                user_id = entity.id
+        else:
+            await event.edit("Wrong using!")
+            return
+
+        if user_id in enemy_list:
+            enemy_list.remove(user_id)
+            config["enemy_list"] = enemy_list
+            save_config()
+            await event.edit("Deleted.")
+        else:
+            await event.edit("There isn't.")
+    except Exception as e:
+        print(f"{e}")
+        await event.edit("Err!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^clear enemies$'))
+async def clear_enemies(event):
+    if not self_enabled:
+        return
+    global enemy_list
+    enemy_list.clear()
+    config["enemy_list"] = enemy_list
+    save_config()
+    await event.edit("Cleared!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^list enemies$'))
+async def list_enemies(event):
+    if not self_enabled:
+        return
+    global enemy_list
+
+    if not enemy_list:
+        await event.edit("Empty!")
+        return
+
+    result = "Enemy list:\n\n"
+    for user_id in enemy_list:
+        try:
+            user = await client.get_entity(user_id)
+            name = user.first_name or "?"
+            mention = f"[{name}](tg://user?id={user_id})"
+            result += f"> {mention}\n"
+        except Exception as e:
+            print(f"{e}")
+            result += f"> Unknown ({user_id})\n"
+
+    await event.edit(result)
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^setfosh (.+)$'))
+async def add_insult(event):
+    if not self_enabled:
+        return
+    global insult_list, insult_queue
+    insult = event.pattern_match.group(1).strip()
+    insult_list.append(insult)
+    config["insult_list"] = insult_list
+    save_config()
+    insult_queue.clear()
+    await event.edit("Added.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^delfosh (.+)$'))
+async def remove_insult(event):
+    if not self_enabled:
+        return
+    global insult_list, insult_queue
+
+    insult = event.pattern_match.group(1).strip()
+    if insult in insult_list:
+        insult_list.remove(insult)
+        config["insult_list"] = insult_list
+        save_config()
+        insult_queue.clear()
+        await event.edit("Deleted.")
+    else:
+        await event.edit("There isn't.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^clear foshes$'))
+async def clear_insults(event):
+    if not self_enabled:
+        return
+    global insult_list, insult_queue
+    insult_list.clear()
+    config["insult_list"] = insult_list
+    save_config()
+    insult_queue.clear()
+    await event.edit("Cleared!")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^list foshes$'))
+async def list_insults(event):
+    if not self_enabled:
+        return
+    global insult_list
+
+    if not insult_list:
+        await event.edit("Empty!")
+        return
+
+    with open("insults.txt", "w", encoding="utf-8") as f:
+        f.write("\n".join(insult_list))
+
+    try:
+        if not hasattr(event, "_original"):
+            await event.delete()
+    except Exception as e:
+        print(f"{e}")
+
+    await client.send_file(event.chat_id, "insults.txt", caption="Fosh list:")
+    os.remove("insults.txt")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^setfoshlist$'))
+async def import_insult_file(event):
+    if not self_enabled:
+        return
+    global insult_list, insult_queue
+
+    reply = None
+    try:
+        if hasattr(event, "_original"):
+            reply = await event._original.get_reply_message()
+        else:
+            reply = await event.get_reply_message()
+    except:
+        pass
+
+    if not reply or not reply.file or not reply.file.name.endswith(".txt"):
+        await event.edit("Wrong using!")
+        return
+
+    path = await reply.download_media()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip()]
+
+        if not lines:
+            await event.edit("Empty!")
+            return
+
+        insult_list.clear()
+        insult_list.extend(lines)
+        config["insult_list"] = insult_list
+        save_config()
+        insult_queue.clear()
+        await event.edit("Successfully!")
+    except Exception as e:
+        print(f"{e}")
+        await event.edit("Err!")
+    finally:
+        os.remove(path)
+
+@client.on(events.NewMessage())
+async def auto_insult(event):
+    if not self_enabled:
+        return
+    global enemy_list, insult_list, insult_queue
+
+    if not insult_list or not enemy_list:
+        return
+
+    blocked_chat_id = -1002893393924
+    if event.chat_id == blocked_chat_id:
+        return
+
+    if event.sender_id in enemy_list:
+        if not insult_queue:
+            insult_queue = insult_list.copy()
+            random.shuffle(insult_queue)
+
+        insult = insult_queue.pop()
+        try:
+            await event.reply(insult)
+        except Exception as e:
+            print(f"{e}")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r'^save(?: (https://t\.me/(?:c/\d+|[\w]+)/\d+(?:\?single)?)$)?'))
+async def save_message(event):
+    if not self_enabled:
+        return  
+
+    is_admin = hasattr(event, "_original")
+    reply = await (event._original.get_reply_message() if is_admin else event.get_reply_message())
+    link = event.pattern_match.group(1)  
+
+    if is_admin:  
+        msg = await event._original.reply("Waiting...")  
+    else:  
+        try:  
+            msg = await event.edit("Waiting...")  
+        except:  
+            msg = await event.respond("Waiting...")  
+
+    target_msg = None  
+
+    if reply:  
+        target_msg = reply  
+    elif link:  
+        try:  
+            match = re.match(r'https://t\.me/(c/\d+|[\w]+)/(\d+)', link)  
+            if not match:  
+                single_match = re.match(r'https://t\.me/([\w]+)/(\d+)\?single', link)
+                if single_match:
+                    entity = single_match.group(1)
+                    msg_id = int(single_match.group(2))
+                else:
+                    await msg.edit("Not found!")  
+                    return
+            else:
+                entity_part = match.group(1)  
+                msg_id = int(match.group(2))
+
+                if entity_part.startswith('c/'):
+                    chat_id = int(entity_part.split('/')[1])
+                    try:
+                        entity = await client.get_entity(chat_id)
+                    except:
+                        await msg.edit("Not found!")
+                        return
+                else:
+                    entity = entity_part
+
+            target_msg = await client.get_messages(entity, ids=msg_id)  
+            if not target_msg:  
+                await msg.edit("Not found!")  
+                return  
+        except Exception as e:
+            if "You can't forward messages from a protected chat" not in str(e):
+                print(f"{e}")
+            await msg.edit("Err!")  
+            return  
+    else:  
+        await msg.edit("Wrong using!")  
+        return  
+
+    try:  
+        if target_msg.media:  
+            await client.send_file("me", target_msg.media, caption=target_msg.text if target_msg.text else None)  
+        elif target_msg.text:  
+            await client.send_message("me", target_msg.text)  
+        else:  
+            await msg.edit("Err!")  
+            return  
+
+        await msg.edit("Successfully!")  
+    except Exception as e:
+        if "You can't forward messages from a protected chat" not in str(e):
+            print(f"{e}")
+        try:  
+            if target_msg.text and not target_msg.media:  
+                await client.send_message("me", target_msg.text)  
+                await msg.edit("Successfully!")  
+            elif target_msg.media:  
+                file_path = await client.download_media(target_msg)  
+                await client.send_file("me", file_path, caption=target_msg.text if target_msg.text else None)  
+                os.remove(file_path)  
+                await msg.edit("Successfully!")  
+            else:  
+                await msg.edit("Err!")  
+        except Exception as e:
+            if "You can't forward messages from a protected chat" not in str(e):
+                print(f"{e}")
+            await msg.edit("Err!")
+
+def convert_numbers(text, font_index):
+    if font_index == 13:
+        font_index = random.randint(1, 12)
+
+    font_map = time_fonts.get(font_index, time_fonts[1])
+    return ''.join(font_map.get(ch, ch) for ch in text)
+
+def to_tehran_time(dt):
+    tehran_tz = pytz.timezone('Asia/Tehran')
+    tehran_dt = dt.astimezone(tehran_tz)
+    jdt = jdatetime.datetime.fromgregorian(datetime=tehran_dt)
+    jalali_date = jdt.strftime("%Y/%m/%d")
+    time_str = tehran_dt.strftime("%H:%M:%S")
+    return f"{jalali_date} {time_str}"
+
+def format_deleted_messages_txt(messages):
+    parts = []
+    for m in messages:
+        part = (
+            f"Message: {m.get('content','')}\n"
+            f"Username: @{m.get('username','Unknown')}\n"
+            f"Userid: {m.get('user_id')}\n"
+            f"Time: {m.get('date')}\n"
+            "———"
+        )
+        parts.append(part)
+    return "\n".join(parts)
+
+def format_edited_messages_txt(messages):
+    parts = []
+    for m in messages:
+        part = (
+            f"Username: @{m.get('username','Unknown')}\n"
+            f"Userid: {m.get('user_id')}\n"
+            f"Old Message: {m.get('old_content','')}\n"
+            f"Time Sent: {m.get('original_date','')}\n"
+            f"New Message: {m.get('new_content','')}\n"
+            f"Time Edited: {m.get('edit_time','')}\n"
+            "———"
+        )
+        parts.append(part)
+    return "\n".join(parts)
+
+async def name_rotation_loop():
+    global last_minute_checked
+    while True:
+        if self_enabled and name_rotation_enabled and name_list:
+            tehran = pytz.timezone("Asia/Tehran")
+            now = datetime.now(tehran)
+
+            if last_minute_checked is None:
+                last_minute_checked = now.minute
+            elif now.minute != last_minute_checked:
+                last_minute_checked = now.minute
+                index = now.minute % len(name_list)
+                raw_name = name_list[index]
+
+                hour = now.strftime("%H" if time_format_mode == 1 else "%I")
+                minute = now.strftime("%M")
+                time_str = f"{hour}:{minute}"
+
+                if date_format_mode == 1:
+                    j_now = JalaliDateTime(now)
+                    date_str = f"{j_now.year}/{j_now.month:02}/{j_now.day:02}"
+                else:
+                    date_str = now.strftime("%Y/%m/%d")
+
+                for i in range(1, 14):
+                    raw_name = raw_name.replace(f"[time-{i}]", convert_numbers(time_str, i))
+                    raw_name = raw_name.replace(f"[date-{i}]", convert_numbers(date_str, i))
+
+                try:
+                    await client(functions.account.UpdateProfileRequest(first_name=raw_name))
+                except Exception as e:
+                    print(f"{e}")
+
+        await asyncio.sleep(1)
+
+async def lname_rotation_loop():
+    global last_minute_checked_lname
+    while True:
+        if self_enabled and lname_rotation_enabled and lname_list:
+            tehran = pytz.timezone("Asia/Tehran")
+            now = datetime.now(tehran)
+
+            if last_minute_checked_lname is None:
+                last_minute_checked_lname = now.minute
+            elif now.minute != last_minute_checked_lname:
+                last_minute_checked_lname = now.minute
+                index = now.minute % len(lname_list)
+                raw_lname = lname_list[index]
+
+                hour = now.strftime("%H" if time_format_mode == 1 else "%I")
+                minute = now.strftime("%M")
+                time_str = f"{hour}:{minute}"
+
+                if date_format_mode == 1:
+                    j_now = JalaliDateTime(now)
+                    date_str = f"{j_now.year}/{j_now.month:02}/{j_now.day:02}"
+                else:
+                    date_str = now.strftime("%Y/%m/%d")
+
+                for i in range(1, 14):
+                    raw_lname = raw_lname.replace(f"[time-{i}]", convert_numbers(time_str, i))
+                    raw_lname = raw_lname.replace(f"[date-{i}]", convert_numbers(date_str, i))
+
+                try:
+                    await client(functions.account.UpdateProfileRequest(last_name=raw_lname))
+                except Exception as e:
+                    print(f"{e}")
+
+        await asyncio.sleep(1)
+
+async def bio_rotation_loop():
+    global last_minute_checked_bio
+    while True:
+        if self_enabled and bio_rotation_enabled and bio_list:
+            tehran = pytz.timezone("Asia/Tehran")
+            now = datetime.now(tehran)
+
+            if last_minute_checked_bio is None:
+                last_minute_checked_bio = now.minute
+            elif now.minute != last_minute_checked_bio:
+                last_minute_checked_bio = now.minute
+                index = now.minute % len(bio_list)
+                raw_bio = bio_list[index]
+
+                hour = now.strftime("%H" if time_format_mode == 1 else "%I")
+                minute = now.strftime("%M")
+                time_str = f"{hour}:{minute}"
+
+                if date_format_mode == 1:
+                    j_now = JalaliDateTime(now)
+                    date_str = f"{j_now.year}/{j_now.month:02}/{j_now.day:02}"
+                else:
+                    date_str = now.strftime("%Y/%m/%d")
+
+                for i in range(1, 14):
+                    raw_bio = raw_bio.replace(f"[time-{i}]", convert_numbers(time_str, i))
+                    raw_bio = raw_bio.replace(f"[date-{i}]", convert_numbers(date_str, i))
+
+                try:
+                    await client(functions.account.UpdateProfileRequest(about=raw_bio))
+                except Exception as e:
+                    print(f"e")
+
+        await asyncio.sleep(1)
+
+async def rotate_profile():
+    global used_profile_photo_ids
+
+    while True:
+        if not self_enabled:
+            await asyncio.sleep(5)
+            continue
+        now = datetime.now(pytz.timezone('Asia/Tehran'))
+        next_time = now.replace(second=0, microsecond=0) + timedelta(minutes=profile_interval_minutes)
+        wait_seconds = (next_time - now).total_seconds()
+        await asyncio.sleep(wait_seconds)
+
+        if not profile_enabled or not profile_channel_id:
+            continue
+
+        try:
+            photos = await client.get_messages(profile_channel_id, limit=100)
+            valid_photos = [p for p in photos if p.photo and p.id not in used_profile_photo_ids]
+
+            if not valid_photos:
+                used_profile_photo_ids.clear()
+                config["used_profile_photo_ids"] = used_profile_photo_ids
+                save_config()
+                valid_photos = [p for p in photos if p.photo]
+
+            if not valid_photos:
+                continue
+
+            selected = random.choice(valid_photos)
+            file = await client.download_media(selected)
+
+            if not file:
+                continue
+
+            await client(UploadProfilePhotoRequest(
+                file=await client.upload_file(file)
+            ))
+
+            used_profile_photo_ids.append(selected.id)
+            config["used_profile_photo_ids"] = used_profile_photo_ids
+            save_config()
+            if len(used_profile_photo_ids) > 500:
+                used_profile_photo_ids = used_profile_photo_ids[-500:]
+                config["used_profile_photo_ids"] = used_profile_photo_ids
+                save_config()
+
+            os.remove(file)
+
+            photos = await client.get_profile_photos('me')
+            if len(photos) > profile_max_count:
+                await client(DeletePhotosRequest(id=photos[profile_max_count:]))
+
+        except Exception as e:
+            print(f"{e}")
+
+async def check_membership_and_pin_chat():
+    while True:
+        try:
+            me = await client.get_me()
+            channels = ["AlfredSelf"]
+            group_invite_hash = "NvwDRQLiFdI1MDBi"
+            group_id = -1002893393924
+
+            for username in channels:
+                is_member = True
+                try:
+                    await client(GetParticipantRequest(username, me.id))
+                except Exception as e:
+                    error_text = str(e).upper()
+                    if "NOT A MEMBER" in error_text or "PARTICIPANT" in error_text:
+                        is_member = False
+                    else:
+                        print(f"{e}")
+
+                if not is_member:
+                    try:
+                        await client(JoinChannelRequest(username))
+                    except Exception as join_err:
+                        join_error_text = str(join_err).upper()
+                        if "BANNED" in join_error_text or "NOT PERMITTED" in join_error_text or "LACK PERMISSION" in join_error_text:
+                            try:
+                                await client.send_message("me", "به دلیل بن بودن از کانال سلف، سلف شما غیر فعال شد!")
+                            except:
+                                pass
+                            await asyncio.sleep(1)
+                            os._exit(0)
+                        else:
+                            print(f"{join_err}")
+
+            is_group_member = True
+            try:
+                await client(GetParticipantRequest(group_id, me.id))
+            except Exception as e:
+                error_text = str(e).upper()
+                if "NOT A MEMBER" in error_text or "PARTICIPANT" in error_text or "INPUT ENTITY" in error_text:
+                    is_group_member = False
+                else:
+                    print(f"{e}")
+
+            if not is_group_member:
+                try:
+                    await client(ImportChatInviteRequest(group_invite_hash))
+                except Exception as join_err:
+                    join_error_text = str(join_err).upper()
+                    if "BANNED" in join_error_text or "NOT PERMITTED" in join_error_text or "LACK PERMISSION" in join_error_text or "EXPIRED" in join_error_text:
+                        try:
+                            await client.send_message("me", "به دلیل بن بودن از گروه، سلف شما غیر فعال شد!")
+                        except:
+                            pass
+                        await asyncio.sleep(1)
+                        os._exit(0)
+                    else:
+                        print(f"{join_err}")
+
+            try:
+                await client(ToggleDialogPinRequest(
+                    peer="AlfredSelf",
+                    pinned=True
+                ))
+            except Exception as pin_err:
+                print(f"{pin_err}")
+
+        except Exception as global_err:
+            print(f"{global_err}")
+
+        await asyncio.sleep(21600)
+
+async def cleanup_self_file():
+    try:
+        path = "self.SELF"
+        if os.path.exists(path):
+            os.remove(path)
+        else:
+            return
+    except Exception as e:
+        print(f"{e}")
+
+async def main():
+    asyncio.create_task(rotate_profile())
+    client.loop.create_task(name_rotation_loop())
+    client.loop.create_task(lname_rotation_loop())
+    client.loop.create_task(bio_rotation_loop())
+    client.loop.create_task(check_membership_and_pin_chat())
+    await cleanup_self_file()
+    await client.run_until_disconnected()
+
+if __name__ == '__main__':
+    with client:
+        client.loop.run_until_complete(main())
