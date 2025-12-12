@@ -11,11 +11,11 @@
 
 // ==================== GLOBAL CONFIGURATION ====================
 const CONFIG = {
-  TELEGRAM_BOT_TOKEN: '8289002301:AAGqHR1kePZYCtkWsTj59k1OsQjtEyofxEA',
-  ADMIN_ID: 6508600903,
+  TELEGRAM_BOT_TOKEN: 'YOUR_TELEGRAM_BOT_TOKEN_HERE',
+  ADMIN_ID: 5579254206,
   ADMIN_USERNAME: '@AnishtayiN',
-  REQUIRED_CHANNEL: '@no1self',
-  REQUIRED_CHANNEL_ID: -1003101954943,
+  REQUIRED_CHANNEL: '@YourChannelName',
+  REQUIRED_CHANNEL_ID: -100,
   MAX_FILE_SIZE: 2147483648,
   LINK_EXPIRY_HOURS: 48,
   FREE_DAILY_LIMIT: 2,
@@ -1973,7 +1973,6 @@ export {
   collectSystemStats,
   setupWebhookURL,
   getBotInfo,
-  exportUserStats,
   deleteUser,
   batchUpdateUsersPremium,
   batchAddReferralPoints,
